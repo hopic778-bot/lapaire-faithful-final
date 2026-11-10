@@ -14,24 +14,46 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
   if($action==='save'){
     $id = (int)($_POST['id']??0);
 
+    // Ensure upload directory exists
+    if(!is_dir($uploadDir)){
+      mkdir($uploadDir, 0755, true);
+    }
+
     // Handle image upload
     $imagePath = $_POST['existing_image']??''; // keep old image by default
     if(!empty($_FILES['frame_image']['name'])){
       $file    = $_FILES['frame_image'];
-      $ext     = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-      $allowed = ['jpg','jpeg','png','webp','gif'];
-      if(!in_array($ext,$allowed)){
-        $uploadErr = 'Only JPG, PNG, WEBP or GIF images are allowed.';
-      } elseif($file['size'] > 5*1024*1024){
-        $uploadErr = 'Image must be under 5MB.';
+
+      // Check for PHP upload errors first
+      if($file['error'] !== UPLOAD_ERR_OK){
+        $phpUploadErrors = [
+          UPLOAD_ERR_INI_SIZE   => 'File exceeds the server upload_max_filesize limit.',
+          UPLOAD_ERR_FORM_SIZE  => 'File exceeds the form MAX_FILE_SIZE limit.',
+          UPLOAD_ERR_PARTIAL    => 'File was only partially uploaded.',
+          UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
+          UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder on server.',
+          UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+          UPLOAD_ERR_EXTENSION  => 'A PHP extension blocked the upload.',
+        ];
+        $uploadErr = $phpUploadErrors[$file['error']] ?? 'Unknown upload error (code '.$file['error'].')';
       } else {
-        $newName   = 'frame_'.time().'_'.bin2hex(random_bytes(4)).'.'.$ext;
-        $dest      = $uploadDir.$newName;
-        if(move_uploaded_file($file['tmp_name'], $dest)){
-          // Delete old image if replacing
-          if($imagePath && file_exists($uploadDir.$imagePath))
-            @unlink($uploadDir.$imagePath);
-          $imagePath = $newName;
+        $ext     = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $allowed = ['jpg','jpeg','png','webp','gif'];
+        if(!in_array($ext,$allowed)){
+          $uploadErr = 'Only JPG, PNG, WEBP or GIF images are allowed.';
+        } elseif($file['size'] > 5*1024*1024){
+          $uploadErr = 'Image must be under 5MB.';
+        } else {
+          $newName   = 'frame_'.time().'_'.bin2hex(random_bytes(4)).'.'.$ext;
+          $dest      = $uploadDir.$newName;
+          if(move_uploaded_file($file['tmp_name'], $dest)){
+            // Delete old image if replacing
+            if($imagePath && file_exists($uploadDir.$imagePath))
+              @unlink($uploadDir.$imagePath);
+            $imagePath = $newName;
+          } else {
+            $uploadErr = 'Failed to move uploaded file. Check folder permissions on assets/uploads/frames/';
+          }
         }
       }
     }
@@ -65,7 +87,10 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     $pdo->prepare('DELETE FROM products WHERE id=?')->execute([$pid]);
   }
 
-  header('Location:products.php');exit;
+  // Only redirect if there was no upload error
+  if(empty($uploadErr)){
+    header('Location:products.php');exit;
+  }
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
