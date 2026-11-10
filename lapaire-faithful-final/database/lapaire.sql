@@ -1,0 +1,19 @@
+CREATE DATABASE IF NOT EXISTS lapaire_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;USE lapaire_db;
+CREATE TABLE branches(id INT AUTO_INCREMENT PRIMARY KEY,name VARCHAR(120) NOT NULL,city VARCHAR(80) NOT NULL,address VARCHAR(255) NOT NULL,phone VARCHAR(40) NOT NULL,email VARCHAR(140) NOT NULL,hours VARCHAR(160) NOT NULL,active TINYINT(1) DEFAULT 1);
+CREATE TABLE products(id INT AUTO_INCREMENT PRIMARY KEY,name VARCHAR(120) NOT NULL,category VARCHAR(60) NOT NULL,price DECIMAL(10,2) NOT NULL,shape VARCHAR(60),material VARCHAR(60),color VARCHAR(60),description TEXT,active TINYINT(1) DEFAULT 1,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE appointments(id INT AUTO_INCREMENT PRIMARY KEY,full_name VARCHAR(120) NOT NULL,email VARCHAR(140) NOT NULL,phone VARCHAR(40) NOT NULL,branch_id INT NULL,appointment_date DATE NOT NULL,appointment_time TIME NOT NULL,status ENUM('Pending','Confirmed','Completed','Cancelled') DEFAULT 'Pending',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(branch_id) REFERENCES branches(id) ON DELETE SET NULL);
+CREATE TABLE enquiries(id INT AUTO_INCREMENT PRIMARY KEY,full_name VARCHAR(120) NOT NULL,email VARCHAR(140) NOT NULL,phone VARCHAR(40),subject VARCHAR(160) NOT NULL,message TEXT NOT NULL,status ENUM('New','Read','Closed') DEFAULT 'New',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE posts(id INT AUTO_INCREMENT PRIMARY KEY,title VARCHAR(180) NOT NULL,excerpt VARCHAR(300) NOT NULL,body TEXT NOT NULL,published TINYINT(1) DEFAULT 1,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE admins(id INT AUTO_INCREMENT PRIMARY KEY,username VARCHAR(80) UNIQUE NOT NULL,password_hash VARCHAR(255) NOT NULL,display_name VARCHAR(100) NOT NULL);
+INSERT INTO branches(name,city,address,phone,email,hours) VALUES
+('Kampala Road','Kampala','I&M Bank Building, Opposite FoodHub, Kampala Road','+256770748938','kampalaroad.ug@lapaireglasses.com','M-F 8:30am - 7pm / S 9am - 5pm'),
+('Ntinda','Kampala','Stanbic Bank Building, Kiwatule Road, Ntinda','+256776886393','ntinda.ug@lapaireglasses.com','M-F 8:30am - 7pm / S 9am - 5pm'),
+('Entebbe','Entebbe','Entebbe town','+256700000001','entebbe@example.com','Mon-Sat'),
+('Jinja','Jinja','Jinja town','+256700000002','jinja@example.com','Mon-Sat'),
+('Masaka','Masaka','Masaka town','+256700000003','masaka@example.com','Mon-Sat'),
+('Mbale','Mbale','Mbale town','+256700000004','mbale@example.com','Mon-Sat'),
+('Mbarara','Mbarara','Mbarara town','+256700000005','mbarara@example.com','Mon-Sat');
+INSERT INTO products(name,category,price,shape,material,color,description) VALUES
+('Kebili-C1','Prescription',105000,'Round','Metal','Black','Modern round metal frame'),('Carnot-C2','Prescription',105000,'Round','Mixed','Brown','Everyday mixed-material frame'),('Cape Town-C1','Prescription',105000,'Rectangle','TR90','Black','Light rectangular frame'),('Kenitra-C5','Prescription',105000,'Square','Plastic','Blue','Bold square frame'),('Jijel-C3','Prescription',105000,'Cat-eye','Metal','Gold','Metal cat-eye frame'),('Pate-C2','Prescription',50000,'Rectangle','Plastic','Black','Frame-only starter option');
+INSERT INTO posts(title,excerpt,body) VALUES
+('5 Tips to Keep Your Eyes Healthy','Simple habits that support everyday eye care.','Educational draft content to be reviewed by the client before publication.'),('How to Choose the Right Frame','Consider shape, width, material and daily use.','Educational draft content to be reviewed by the client before publication.'),('The Importance of Regular Eye Tests','Eye tests can help identify vision correction needs.','Educational draft content to be reviewed by the client before publication.');
