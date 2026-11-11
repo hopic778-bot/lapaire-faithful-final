@@ -92,7 +92,17 @@ if(user_logged_in()){
       ?>
       <div class="col-md-6 col-lg-4">
         <div class="cardx product-card h-100">
-          <div class="frame-photo position-relative" style="background-image:url('<?=$frameImg?>')">
+          <div class="frame-photo position-relative" style="height:190px;overflow:hidden;background:#eff8ff;">
+            <?php if(!empty($p['image'])):?>
+            <img src="assets/uploads/frames/<?=e($p['image'])?>" 
+                 alt="<?=e($p['name'])?>"
+                 style="width:100%;height:190px;object-fit:cover;display:block;"
+                 onerror="this.src='<?=frame_image($p['color']??'',$p['shape']??'',$p['category']??'')?>'">
+            <?php else:?>
+            <img src="<?=$frameImg?>" 
+                 alt="<?=e($p['name'])?>"
+                 style="width:100%;height:190px;object-fit:cover;display:block;">
+            <?php endif;?>
             <?php if($isNew):?>
             <span class="position-absolute top-0 start-0 m-2 badge bg-primary">New</span>
             <?php endif;?>

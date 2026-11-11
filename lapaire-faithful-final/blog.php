@@ -3,14 +3,14 @@ require 'includes/config.php';
 $pageTitle='Blog';$active='Blog';
 $posts=$pdo->query("SELECT * FROM posts WHERE published=1 ORDER BY created_at DESC")->fetchAll();
 
-// All eye care / optical specific images
+// Fallback images if no image uploaded
 $blogImgs=[
-  'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&q=80', // optician exam
-  'https://images.unsplash.com/photo-1574258495973-f010dfbb5371?w=600&q=80', // glasses display
-  'https://images.unsplash.com/photo-1591076482161-42ce6da69f67?w=600&q=80', // prescription glasses
-  'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=600&q=80', // eye test chart
-  'https://images.unsplash.com/photo-1559757148-5c350d0d3c56?w=600&q=80',    // optician with patient
-  'https://images.unsplash.com/photo-1511499767150-a48a237f0083?w=600&q=80', // sunglasses
+  'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&q=80',
+  'https://images.unsplash.com/photo-1574258495973-f010dfbb5371?w=600&q=80',
+  'https://images.unsplash.com/photo-1591076482161-42ce6da69f67?w=600&q=80',
+  'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=600&q=80',
+  'https://images.unsplash.com/photo-1559757148-5c350d0d3c56?w=600&q=80',
+  'https://images.unsplash.com/photo-1511499767150-a48a237f0083?w=600&q=80',
 ];
 include 'includes/header.php';
 ?>
@@ -36,11 +36,16 @@ include 'includes/header.php';
     <h4 class="fw-bold mb-4">All Articles</h4>
     <div class="row g-4">
       <?php foreach($posts as $i=>$p):
-        $img=$blogImgs[$i%count($blogImgs)];
+        $img = !empty($p['image'])
+          ? 'assets/uploads/blog/'.e($p['image'])
+          : $blogImgs[$i%count($blogImgs)];
       ?>
       <div class="col-md-6 col-lg-4">
         <article class="cardx h-100 overflow-hidden d-flex flex-column blog-card">
-          <div class="blog-photo" style="background-image:url('<?=$img?>')">
+          <div class="blog-photo" style="position:relative;overflow:hidden;">
+            <img src="<?=$img?>" alt="<?=e($p['title'])?>"
+                 style="width:100%;height:200px;object-fit:cover;display:block;"
+                 onerror="this.src='<?=$blogImgs[$i%count($blogImgs)]?>'">
             <span class="blog-cat-tag">Eye Care</span>
           </div>
           <div class="p-4 flex-grow-1 d-flex flex-column">

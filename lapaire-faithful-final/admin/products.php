@@ -6,6 +6,13 @@ $adminTitle = 'Frames & Products';
 $uploadDir  = dirname(__DIR__).'/assets/uploads/frames/';
 $uploadUrl  = '../assets/uploads/frames/';
 
+// ── Ensure upload directory and image column exist ───────────────────────────
+if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+try {
+  $col = $pdo->query("SHOW COLUMNS FROM products LIKE 'image'")->fetch();
+  if(!$col) $pdo->exec("ALTER TABLE products ADD COLUMN image VARCHAR(255) NULL AFTER color");
+} catch(Exception $e){ /* ignore */ }
+
 // ── Handle POST ──────────────────────────────────────────────────────────────
 if($_SERVER['REQUEST_METHOD']==='POST'){
   verify_csrf();
@@ -15,49 +22,51 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     $id = (int)($_POST['id']??0);
 
     // Ensure upload directory exists
-    if(!is_dir($uploadDir)){
-      mkdir($uploadDir, 0755, true);
-    }
+    if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
 
     // Handle image upload
-    $imagePath = $_POST['existing_image']??''; // keep old image by default
-    if(!empty($_FILES['frame_image']['name'])){
-      $file    = $_FILES['frame_image'];
+    $imagePath = trim($_POST['existing_image']??'');
+    $debugLog  = []; // collect debug info
 
-      // Check for PHP upload errors first
+    if(!empty($_FILES['frame_image']['name'])){
+      $file = $_FILES['frame_image'];
+      $debugLog[] = 'File received: '.$file['name'].' | size: '.$file['size'].' | error: '.$file['error'];
+
       if($file['error'] !== UPLOAD_ERR_OK){
-        $phpUploadErrors = [
-          UPLOAD_ERR_INI_SIZE   => 'File exceeds the server upload_max_filesize limit.',
-          UPLOAD_ERR_FORM_SIZE  => 'File exceeds the form MAX_FILE_SIZE limit.',
-          UPLOAD_ERR_PARTIAL    => 'File was only partially uploaded.',
-          UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
-          UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder on server.',
-          UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
-          UPLOAD_ERR_EXTENSION  => 'A PHP extension blocked the upload.',
-        ];
-        $uploadErr = $phpUploadErrors[$file['error']] ?? 'Unknown upload error (code '.$file['error'].')';
+        $errLabels = [1=>'INI_SIZE',2=>'FORM_SIZE',3=>'PARTIAL',4=>'NO_FILE',6=>'NO_TMP_DIR',7=>'CANT_WRITE',8=>'EXTENSION'];
+        $uploadErr = 'PHP upload error '.($errLabels[$file['error']]??$file['error']).'. upload_max_filesize='.ini_get('upload_max_filesize');
+        $debugLog[] = 'ERROR: '.$uploadErr;
       } else {
-        $ext     = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        $allowed = ['jpg','jpeg','png','webp','gif'];
-        if(!in_array($ext,$allowed)){
-          $uploadErr = 'Only JPG, PNG, WEBP or GIF images are allowed.';
-        } elseif($file['size'] > 5*1024*1024){
-          $uploadErr = 'Image must be under 5MB.';
+        // Detect extension from MIME type
+        $finfo    = finfo_open(FILEINFO_MIME_TYPE);
+        $realMime = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+        $debugLog[] = 'Real MIME: '.$realMime;
+
+        $mimeToExt = ['image/jpeg'=>'jpg','image/jpg'=>'jpg','image/pjpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif','image/bmp'=>'jpg','image/tiff'=>'jpg','image/x-ms-bmp'=>'jpg','image/svg+xml'=>'svg','image/avif'=>'jpg','image/heic'=>'jpg','image/heif'=>'jpg'];
+        $origExt   = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $extMap    = ['jfif'=>'jpg','jpe'=>'jpg','jpeg'=>'jpg','jpg'=>'jpg','png'=>'png','webp'=>'webp','gif'=>'gif','bmp'=>'jpg','tif'=>'jpg','tiff'=>'jpg','avif'=>'jpg','heic'=>'jpg','heif'=>'jpg'];
+        $saveExt   = $mimeToExt[$realMime] ?? $extMap[$origExt] ?? 'jpg';
+        $debugLog[] = 'Save ext: '.$saveExt;
+
+        $newName = 'frame_'.time().'_'.bin2hex(random_bytes(4)).'.'.$saveExt;
+        $dest    = $uploadDir.$newName;
+        $debugLog[] = 'Destination: '.$dest;
+
+        if(move_uploaded_file($file['tmp_name'], $dest)){
+          if($imagePath && file_exists($uploadDir.$imagePath)) @unlink($uploadDir.$imagePath);
+          $imagePath = $newName;
+          $debugLog[] = 'SUCCESS: saved as '.$newName;
         } else {
-          $newName   = 'frame_'.time().'_'.bin2hex(random_bytes(4)).'.'.$ext;
-          $dest      = $uploadDir.$newName;
-          if(move_uploaded_file($file['tmp_name'], $dest)){
-            // Delete old image if replacing
-            if($imagePath && file_exists($uploadDir.$imagePath))
-              @unlink($uploadDir.$imagePath);
-            $imagePath = $newName;
-          } else {
-            $uploadErr = 'Failed to move uploaded file. Check folder permissions on assets/uploads/frames/';
-          }
+          $uploadErr = 'move_uploaded_file failed. Dir writable: '.(is_writable($uploadDir)?'YES':'NO');
+          $debugLog[] = 'FAILED: '.$uploadErr;
         }
       }
+    } else {
+      $debugLog[] = 'No file in $_FILES[frame_image] — keeping existing: '.($imagePath?:' (none)');
     }
 
+    // Always save to DB (even if no image uploaded)
     $v = [
       trim($_POST['name']),
       $_POST['category'],
@@ -65,16 +74,26 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
       trim($_POST['shape']),
       trim($_POST['material']),
       trim($_POST['color']),
-      $imagePath,
+      $imagePath,   // will be filename if uploaded, or existing, or empty
       trim($_POST['description']),
       isset($_POST['active'])?1:0,
     ];
+    $debugLog[] = 'imagePath saved to DB: '.($imagePath?:' (empty)');
+
     if($id){
       $v[]=$id;
       $pdo->prepare('UPDATE products SET name=?,category=?,price=?,shape=?,material=?,color=?,image=?,description=?,active=? WHERE id=?')->execute($v);
+      $debugLog[] = 'Updated product ID '.$id;
     } else {
       $pdo->prepare('INSERT INTO products(name,category,price,shape,material,color,image,description,active) VALUES(?,?,?,?,?,?,?,?,?)')->execute($v);
+      $debugLog[] = 'Inserted new product, last ID: '.$pdo->lastInsertId();
     }
+
+    // Store debug in session so we can show it after redirect
+    $_SESSION['upload_debug'] = $debugLog;
+    $_SESSION['upload_err']   = $uploadErr ?? '';
+
+    header('Location:products.php?debug=1');exit;
   }
 
   if($action==='delete'){
@@ -91,6 +110,13 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
   if(empty($uploadErr)){
     header('Location:products.php');exit;
   }
+  // Debug info if upload failed
+  $debugInfo = [
+    'POST files' => $_FILES,
+    'imagePath saved' => $imagePath ?? '(none)',
+    'uploadDir exists' => is_dir($uploadDir),
+    'uploadDir writable' => is_writable($uploadDir),
+  ];
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
@@ -115,8 +141,22 @@ $currentImg = $edit && $edit['image']
 include '_top.php';
 ?>
 
-<?php if(!empty($uploadErr)):?>
-<div class="alert alert-danger mb-3"><?=e($uploadErr)?></div>
+<?php
+// Show debug info if redirected from save
+if(isset($_GET['debug']) && !empty($_SESSION['upload_debug'])):
+  $dbgLog = $_SESSION['upload_debug'];
+  $dbgErr = $_SESSION['upload_err'] ?? '';
+  unset($_SESSION['upload_debug'], $_SESSION['upload_err']);
+?>
+<div class="alert alert-<?=$dbgErr?'danger':'info'?> mb-3">
+  <b><?=$dbgErr ? '❌ Upload had an error' : '✔ Save completed — debug info'?></b>
+  <?php if($dbgErr):?><div class="mt-1 text-danger"><?=e($dbgErr)?></div><?php endif;?>
+  <ul class="mb-0 mt-2" style="font-size:13px;font-family:monospace">
+    <?php foreach($dbgLog as $line):?>
+    <li><?=e($line)?></li>
+    <?php endforeach;?>
+  </ul>
+</div>
 <?php endif;?>
 
 <div class="row g-4">
@@ -130,7 +170,7 @@ include '_top.php';
       <div id="framePreview" class="frame-preview-box mb-2"
            style="background-image:url('<?=$currentImg?>')"></div>
 
-      <form method="post" enctype="multipart/form-data" id="productForm">
+      <form method="post" enctype="multipart/form-data" id="productForm" onsubmit="return validateForm()">
         <input type="hidden" name="csrf"           value="<?=csrf()?>">
         <input type="hidden" name="action"         value="save">
         <input type="hidden" name="id"             value="<?=$edit['id']??''?>">
@@ -143,7 +183,7 @@ include '_top.php';
           </label>
           <div class="upload-area" id="uploadArea">
             <input type="file" name="frame_image" id="frameImageInput"
-                   accept="image/jpeg,image/png,image/webp,image/gif"
+                   accept="image/*"
                    class="upload-input">
             <div class="upload-placeholder" id="uploadPlaceholder">
               <?php if($edit && $edit['image']):?>
@@ -311,14 +351,26 @@ const preview     = document.getElementById('framePreview');
 
 input.addEventListener('change', function(){
   if(!this.files[0]) return;
-  const url = URL.createObjectURL(this.files[0]);
-  // Update preview box
+  const file = this.files[0];
+  const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+
+  // Remove any previous size warning
+  const oldWarn = document.getElementById('sizeWarning');
+  if(oldWarn) oldWarn.remove();
+
+  // Show file info
+  const info = document.createElement('div');
+  info.id = 'sizeWarning';
+  info.className = 'alert alert-success mt-2 mb-0 py-2';
+  info.innerHTML = `✔ Image selected: <b>${file.name}</b> (${sizeMB} MB)`;
+  uploadArea.after(info);
+
+  const url = URL.createObjectURL(file);
   preview.style.backgroundImage = 'url('+url+')';
-  // Update upload area thumbnail
   placeholder.innerHTML = `
     <div class="upload-has-image">
       <img src="${url}" alt="Preview" class="upload-current-img">
-      <div class="small text-muted mt-1">${this.files[0].name}</div>
+      <div class="small text-muted mt-1">${file.name} (${sizeMB} MB)</div>
     </div>`;
 });
 
@@ -332,6 +384,10 @@ uploadArea.addEventListener('drop', e=>{
     input.dispatchEvent(new Event('change'));
   }
 });
+
+function validateForm(){
+  return true; // all image types and sizes accepted
+}
 
 // ── Auto-preview from color/category dropdowns (when no image uploaded) ─────
 const previewMap = {
