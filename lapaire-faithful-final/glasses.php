@@ -86,18 +86,21 @@ if(user_logged_in()){
       <?php foreach($products as $p):
         $isNew    = strtotime($p['created_at']) > strtotime('-14 days');
         $wished   = in_array($p['id'], $userWishlist);
+        $diskBase = __DIR__.'/assets/uploads/frames/';
         $frameImg = !empty($p['image'])
-          ? 'assets/uploads/frames/'.e($p['image'])
+          ? UPLOADS_URL.'frames/'.e($p['image'])
           : frame_image($p['color']??'', $p['shape']??'', $p['category']??'');
+        $imgVersion = !empty($p['image']) && file_exists($diskBase.$p['image'])
+          ? filemtime($diskBase.$p['image'])
+          : time();
       ?>
       <div class="col-md-6 col-lg-4">
         <div class="cardx product-card h-100">
           <div class="frame-photo position-relative" style="height:190px;overflow:hidden;background:#eff8ff;">
             <?php if(!empty($p['image'])):?>
-            <img src="assets/uploads/frames/<?=e($p['image'])?>" 
+            <img src="<?=UPLOADS_URL?>frames/<?=e($p['image'])?>?v=<?=$imgVersion?>" 
                  alt="<?=e($p['name'])?>"
-                 style="width:100%;height:190px;object-fit:cover;display:block;"
-                 onerror="this.src='<?=frame_image($p['color']??'',$p['shape']??'',$p['category']??'')?>'">
+                 style="width:100%;height:190px;object-fit:cover;display:block;">
             <?php else:?>
             <img src="<?=$frameImg?>" 
                  alt="<?=e($p['name'])?>"

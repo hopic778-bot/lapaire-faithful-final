@@ -3,11 +3,11 @@ require '../includes/config.php';
 require '../includes/frame_image.php';
 admin_only();
 $adminTitle = 'Frames & Products';
-$uploadDir  = dirname(__DIR__).'/assets/uploads/frames/';
-$uploadUrl  = '../assets/uploads/frames/';
+$uploadDir  = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'frames' . DIRECTORY_SEPARATOR;
+$uploadUrl  = UPLOADS_URL.'frames/';
 
 // ── Ensure upload directory and image column exist ───────────────────────────
-if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+if(!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
 try {
   $col = $pdo->query("SHOW COLUMNS FROM products LIKE 'image'")->fetch();
   if(!$col) $pdo->exec("ALTER TABLE products ADD COLUMN image VARCHAR(255) NULL AFTER color");
@@ -22,7 +22,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     $id = (int)($_POST['id']??0);
 
     // Ensure upload directory exists
-    if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+    if(!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
 
     // Handle image upload
     $imagePath = trim($_POST['existing_image']??'');
@@ -58,8 +58,15 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
           $imagePath = $newName;
           $debugLog[] = 'SUCCESS: saved as '.$newName;
         } else {
-          $uploadErr = 'move_uploaded_file failed. Dir writable: '.(is_writable($uploadDir)?'YES':'NO');
-          $debugLog[] = 'FAILED: '.$uploadErr;
+          // Fallback: try copy() — sometimes needed on WAMP/Windows
+          if(copy($file['tmp_name'], $dest)){
+            if($imagePath && file_exists($uploadDir.$imagePath)) @unlink($uploadDir.$imagePath);
+            $imagePath = $newName;
+            $debugLog[] = 'SUCCESS (via copy): saved as '.$newName;
+          } else {
+            $uploadErr = 'Could not save image. Dir: '.$uploadDir.' | Writable: '.(is_writable($uploadDir)?'YES':'NO').' | PHP tmp: '.$file['tmp_name'];
+            $debugLog[] = 'FAILED: '.$uploadErr;
+          }
         }
       }
     } else {
@@ -93,7 +100,13 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     $_SESSION['upload_debug'] = $debugLog;
     $_SESSION['upload_err']   = $uploadErr ?? '';
 
-    header('Location:products.php?debug=1');exit;
+    // If upload failed, stay on page to show error clearly — don't redirect
+    if(!empty($uploadErr)){
+      $showDebug = true;
+      $showDebugErr = $uploadErr;
+    } else {
+      header('Location:products.php?saved=1');exit;
+    }
   }
 
   if($action==='delete'){
@@ -104,19 +117,8 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     if($row && $row['image'] && file_exists($uploadDir.$row['image']))
       @unlink($uploadDir.$row['image']);
     $pdo->prepare('DELETE FROM products WHERE id=?')->execute([$pid]);
-  }
-
-  // Only redirect if there was no upload error
-  if(empty($uploadErr)){
     header('Location:products.php');exit;
   }
-  // Debug info if upload failed
-  $debugInfo = [
-    'POST files' => $_FILES,
-    'imagePath saved' => $imagePath ?? '(none)',
-    'uploadDir exists' => is_dir($uploadDir),
-    'uploadDir writable' => is_writable($uploadDir),
-  ];
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
@@ -142,20 +144,26 @@ include '_top.php';
 ?>
 
 <?php
-// Show debug info if redirected from save
-if(isset($_GET['debug']) && !empty($_SESSION['upload_debug'])):
-  $dbgLog = $_SESSION['upload_debug'];
-  $dbgErr = $_SESSION['upload_err'] ?? '';
-  unset($_SESSION['upload_debug'], $_SESSION['upload_err']);
-?>
-<div class="alert alert-<?=$dbgErr?'danger':'info'?> mb-3">
-  <b><?=$dbgErr ? '❌ Upload had an error' : '✔ Save completed — debug info'?></b>
-  <?php if($dbgErr):?><div class="mt-1 text-danger"><?=e($dbgErr)?></div><?php endif;?>
-  <ul class="mb-0 mt-2" style="font-size:13px;font-family:monospace">
-    <?php foreach($dbgLog as $line):?>
-    <li><?=e($line)?></li>
-    <?php endforeach;?>
-  </ul>
+// Show success message after redirect
+if(isset($_GET['saved'])):?>
+<div class="alert alert-success mb-3">✔ Product saved successfully.</div>
+<?php endif;?>
+
+<?php
+// Show debug/error inline if upload failed (no redirect happened)
+if(!empty($showDebug)):?>
+<div class="alert alert-danger mb-3" style="font-family:monospace;font-size:13px">
+  <b style="font-size:15px">❌ Image upload failed — details below:</b>
+  <div class="mt-2 p-2 bg-white rounded">
+    <b>Error:</b> <?=e($showDebugErr)?><br><br>
+    <b>Full log:</b>
+    <ul class="mb-0 mt-1">
+      <?php foreach($debugLog as $line):?>
+      <li><?=e($line)?></li>
+      <?php endforeach;?>
+    </ul>
+  </div>
+  <div class="mt-2">The product was saved <b>without an image</b>. Fix the error above and edit the product to add the image.</div>
 </div>
 <?php endif;?>
 

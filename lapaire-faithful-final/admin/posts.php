@@ -4,7 +4,7 @@ admin_only();
 $adminTitle = 'Blog Posts';
 
 $uploadDir = dirname(__DIR__).'/assets/uploads/blog/';
-$uploadUrl = '../assets/uploads/blog/';
+$uploadUrl = UPLOADS_URL.'blog/';
 
 // Ensure upload dir and image column exist
 if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
