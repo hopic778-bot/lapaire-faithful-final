@@ -1,51 +1,49 @@
 <?php
 require '../includes/config.php';
+require '../includes/cloudinary.php';
 admin_only();
 $adminTitle = 'Blog Posts';
 
+// Local dir kept for old images
 $uploadDir = dirname(__DIR__).'/assets/uploads/blog/';
-$uploadUrl = UPLOADS_URL.'blog/';
-
-// Ensure upload dir and image column exist
 if(!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
 try {
   $col = $pdo->query("SHOW COLUMNS FROM posts LIKE 'image'")->fetch();
-  if(!$col) $pdo->exec("ALTER TABLE posts ADD COLUMN image VARCHAR(255) NULL AFTER excerpt");
+  if(!$col) $pdo->exec("ALTER TABLE posts ADD COLUMN image VARCHAR(500) NULL AFTER excerpt");
+  $pdo->exec("ALTER TABLE posts MODIFY COLUMN image VARCHAR(500) NULL");
 } catch(Exception $e){}
+
+function post_img_url(string $val): string {
+  if(!$val) return '';
+  if(is_cloudinary_url($val)) return $val;
+  return UPLOADS_URL.'blog/'.$val;
+}
 
 // ── Handle POST ──────────────────────────────────────────────────────────────
 if($_SERVER['REQUEST_METHOD']==='POST'){
   verify_csrf();
 
   if($_POST['action']==='save'){
-    $id = (int)($_POST['id']??0);
-    $imagePath = trim($_POST['existing_image']??'');
+    $id        = (int)($_POST['id']??0);
+    $imageVal  = trim($_POST['existing_image']??'');
+    $uploadErr = '';
 
-    // Handle image upload
-    if(!empty($_FILES['post_image']['name'])){
+    if(!empty($_FILES['post_image']['name']) && $_FILES['post_image']['error'] !== UPLOAD_ERR_NO_FILE){
       $file = $_FILES['post_image'];
-      if($file['error'] === UPLOAD_ERR_OK){
-        $finfo    = finfo_open(FILEINFO_MIME_TYPE);
-        $realMime = finfo_file($finfo, $file['tmp_name']);
-        finfo_close($finfo);
-        $mimeToExt = ['image/jpeg'=>'jpg','image/pjpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif','image/bmp'=>'jpg','image/svg+xml'=>'svg'];
-        $origExt   = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        $extMap    = ['jfif'=>'jpg','jpe'=>'jpg','jpeg'=>'jpg','jpg'=>'jpg','png'=>'png','webp'=>'webp','gif'=>'gif','bmp'=>'jpg'];
-        $saveExt   = $mimeToExt[$realMime] ?? $extMap[$origExt] ?? 'jpg';
-        $newName   = 'blog_'.time().'_'.bin2hex(random_bytes(4)).'.'.$saveExt;
-        $dest      = $uploadDir.$newName;
-        if(move_uploaded_file($file['tmp_name'], $dest)){
-          if($imagePath && file_exists($uploadDir.$imagePath)) @unlink($uploadDir.$imagePath);
-          $imagePath = $newName;
-        } else {
-          $uploadErr = 'Failed to save image.';
-        }
+      if($file['error'] !== UPLOAD_ERR_OK){
+        $uploadErr = 'Upload error code: '.$file['error'];
       } else {
-        $uploadErr = 'Upload error code: '.$file['error'].'. Max size: '.ini_get('upload_max_filesize');
+        try {
+          $result   = cloudinary_upload($file['tmp_name'], 'lapaire/blog');
+          $imageVal = $result['url'];
+        } catch(RuntimeException $ex){
+          $uploadErr = $ex->getMessage();
+        }
       }
     }
 
-    $v = [trim($_POST['title']), trim($_POST['excerpt']), $imagePath, trim($_POST['body']), isset($_POST['published'])?1:0];
+    $v = [trim($_POST['title']), trim($_POST['excerpt']), $imageVal, trim($_POST['body']), isset($_POST['published'])?1:0];
     if($id){
       $v[]=$id;
       $pdo->prepare('UPDATE posts SET title=?,excerpt=?,image=?,body=?,published=? WHERE id=?')->execute($v);
@@ -54,11 +52,11 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     }
 
   } else {
-    // delete
     $pid = (int)$_POST['id'];
     $row = $pdo->prepare('SELECT image FROM posts WHERE id=?');
     $row->execute([$pid]); $row = $row->fetch();
-    if($row && $row['image'] && file_exists($uploadDir.$row['image'])) @unlink($uploadDir.$row['image']);
+    if($row && $row['image'] && !is_cloudinary_url($row['image']) && file_exists($uploadDir.$row['image']))
+      @unlink($uploadDir.$row['image']);
     $pdo->prepare('DELETE FROM posts WHERE id=?')->execute([$pid]);
   }
 
@@ -100,7 +98,7 @@ include '_top.php';
 
           <?php if($edit && $edit['image']):?>
           <div class="mb-2">
-            <img src="<?=$uploadUrl.e($edit['image'])?>" alt="Current"
+            <img src="<?=e(post_img_url($edit['image']))?>" alt="Current"
                  style="width:100%;height:160px;object-fit:cover;border-radius:10px;border:1px solid #dee2e6">
             <div class="small text-muted mt-1">Current image — upload a new one to replace it</div>
           </div>
@@ -165,7 +163,7 @@ include '_top.php';
 
         <!-- thumbnail -->
         <?php if($r['image']):?>
-        <img src="<?=$uploadUrl.e($r['image'])?>" alt=""
+        <img src="<?=e(post_img_url($r['image']))?>" alt=""
              style="width:80px;height:60px;object-fit:cover;border-radius:8px;flex-shrink:0">
         <?php else:?>
         <div style="width:80px;height:60px;background:#eff8ff;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5rem">📰</div>

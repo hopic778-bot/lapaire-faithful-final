@@ -87,8 +87,9 @@ if(user_logged_in()){
         $isNew    = strtotime($p['created_at']) > strtotime('-14 days');
         $wished   = in_array($p['id'], $userWishlist);
         $diskBase = __DIR__.'/assets/uploads/frames/';
+        // image column is now a full Cloudinary URL, or old local filename
         $frameImg = !empty($p['image'])
-          ? UPLOADS_URL.'frames/'.e($p['image'])
+          ? (str_starts_with($p['image'],'http') ? $p['image'] : UPLOADS_URL.'frames/'.e($p['image']))
           : frame_image($p['color']??'', $p['shape']??'', $p['category']??'');
         $imgVersion = !empty($p['image']) && file_exists($diskBase.$p['image'])
           ? filemtime($diskBase.$p['image'])
@@ -98,7 +99,7 @@ if(user_logged_in()){
         <div class="cardx product-card h-100">
           <div class="frame-photo position-relative" style="height:190px;overflow:hidden;background:#eff8ff;">
             <?php if(!empty($p['image'])):?>
-            <img src="<?=UPLOADS_URL?>frames/<?=e($p['image'])?>?v=<?=$imgVersion?>" 
+            <img src="<?=str_starts_with($p['image'],'http') ? e($p['image']) : UPLOADS_URL.'frames/'.e($p['image'])?>" 
                  alt="<?=e($p['name'])?>"
                  style="width:100%;height:190px;object-fit:cover;display:block;">
             <?php else:?>

@@ -1,17 +1,20 @@
 <?php
 require '../includes/config.php';
 require '../includes/frame_image.php';
+require '../includes/cloudinary.php';
 admin_only();
 $adminTitle = 'Frames & Products';
-$uploadDir  = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'frames' . DIRECTORY_SEPARATOR;
-$uploadUrl  = UPLOADS_URL.'frames/';
 
-// ── Ensure upload directory and image column exist ───────────────────────────
+// Local dir kept for backwards compat (old local images still served from here)
+$uploadDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'frames' . DIRECTORY_SEPARATOR;
 if(!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+
 try {
   $col = $pdo->query("SHOW COLUMNS FROM products LIKE 'image'")->fetch();
-  if(!$col) $pdo->exec("ALTER TABLE products ADD COLUMN image VARCHAR(255) NULL AFTER color");
-} catch(Exception $e){ /* ignore */ }
+  if(!$col) $pdo->exec("ALTER TABLE products ADD COLUMN image VARCHAR(500) NULL AFTER color");
+  // Widen column to hold full Cloudinary URL
+  $pdo->exec("ALTER TABLE products MODIFY COLUMN image VARCHAR(500) NULL");
+} catch(Exception $e){}
 
 // ── Handle POST ──────────────────────────────────────────────────────────────
 if($_SERVER['REQUEST_METHOD']==='POST'){
@@ -19,61 +22,25 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
   $action = $_POST['action']??'';
 
   if($action==='save'){
-    $id = (int)($_POST['id']??0);
+    $id        = (int)($_POST['id']??0);
+    $imageVal  = trim($_POST['existing_image']??''); // keep existing by default
+    $uploadErr = '';
 
-    // Ensure upload directory exists
-    if(!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
-
-    // Handle image upload
-    $imagePath = trim($_POST['existing_image']??'');
-    $debugLog  = []; // collect debug info
-
-    if(!empty($_FILES['frame_image']['name'])){
+    if(!empty($_FILES['frame_image']['name']) && $_FILES['frame_image']['error'] !== UPLOAD_ERR_NO_FILE){
       $file = $_FILES['frame_image'];
-      $debugLog[] = 'File received: '.$file['name'].' | size: '.$file['size'].' | error: '.$file['error'];
-
       if($file['error'] !== UPLOAD_ERR_OK){
-        $errLabels = [1=>'INI_SIZE',2=>'FORM_SIZE',3=>'PARTIAL',4=>'NO_FILE',6=>'NO_TMP_DIR',7=>'CANT_WRITE',8=>'EXTENSION'];
-        $uploadErr = 'PHP upload error '.($errLabels[$file['error']]??$file['error']).'. upload_max_filesize='.ini_get('upload_max_filesize');
-        $debugLog[] = 'ERROR: '.$uploadErr;
+        $errLabels = [1=>'File too large (server limit)',2=>'File too large (form limit)',3=>'Partial upload',6=>'No tmp folder',7=>'Cannot write to disk'];
+        $uploadErr = $errLabels[$file['error']] ?? 'Upload error code '.$file['error'];
       } else {
-        // Detect extension from MIME type
-        $finfo    = finfo_open(FILEINFO_MIME_TYPE);
-        $realMime = finfo_file($finfo, $file['tmp_name']);
-        finfo_close($finfo);
-        $debugLog[] = 'Real MIME: '.$realMime;
-
-        $mimeToExt = ['image/jpeg'=>'jpg','image/jpg'=>'jpg','image/pjpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif','image/bmp'=>'jpg','image/tiff'=>'jpg','image/x-ms-bmp'=>'jpg','image/svg+xml'=>'svg','image/avif'=>'jpg','image/heic'=>'jpg','image/heif'=>'jpg'];
-        $origExt   = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        $extMap    = ['jfif'=>'jpg','jpe'=>'jpg','jpeg'=>'jpg','jpg'=>'jpg','png'=>'png','webp'=>'webp','gif'=>'gif','bmp'=>'jpg','tif'=>'jpg','tiff'=>'jpg','avif'=>'jpg','heic'=>'jpg','heif'=>'jpg'];
-        $saveExt   = $mimeToExt[$realMime] ?? $extMap[$origExt] ?? 'jpg';
-        $debugLog[] = 'Save ext: '.$saveExt;
-
-        $newName = 'frame_'.time().'_'.bin2hex(random_bytes(4)).'.'.$saveExt;
-        $dest    = $uploadDir.$newName;
-        $debugLog[] = 'Destination: '.$dest;
-
-        if(move_uploaded_file($file['tmp_name'], $dest)){
-          if($imagePath && file_exists($uploadDir.$imagePath)) @unlink($uploadDir.$imagePath);
-          $imagePath = $newName;
-          $debugLog[] = 'SUCCESS: saved as '.$newName;
-        } else {
-          // Fallback: try copy() — sometimes needed on WAMP/Windows
-          if(copy($file['tmp_name'], $dest)){
-            if($imagePath && file_exists($uploadDir.$imagePath)) @unlink($uploadDir.$imagePath);
-            $imagePath = $newName;
-            $debugLog[] = 'SUCCESS (via copy): saved as '.$newName;
-          } else {
-            $uploadErr = 'Could not save image. Dir: '.$uploadDir.' | Writable: '.(is_writable($uploadDir)?'YES':'NO').' | PHP tmp: '.$file['tmp_name'];
-            $debugLog[] = 'FAILED: '.$uploadErr;
-          }
+        try {
+          $result   = cloudinary_upload($file['tmp_name'], 'lapaire/frames');
+          $imageVal = $result['url'];  // full https:// URL saved to DB
+        } catch(RuntimeException $ex){
+          $uploadErr = $ex->getMessage();
         }
       }
-    } else {
-      $debugLog[] = 'No file in $_FILES[frame_image] — keeping existing: '.($imagePath?:' (none)');
     }
 
-    // Always save to DB (even if no image uploaded)
     $v = [
       trim($_POST['name']),
       $_POST['category'],
@@ -81,29 +48,21 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
       trim($_POST['shape']),
       trim($_POST['material']),
       trim($_POST['color']),
-      $imagePath,   // will be filename if uploaded, or existing, or empty
+      $imageVal,
       trim($_POST['description']),
       isset($_POST['active'])?1:0,
     ];
-    $debugLog[] = 'imagePath saved to DB: '.($imagePath?:' (empty)');
 
     if($id){
       $v[]=$id;
       $pdo->prepare('UPDATE products SET name=?,category=?,price=?,shape=?,material=?,color=?,image=?,description=?,active=? WHERE id=?')->execute($v);
-      $debugLog[] = 'Updated product ID '.$id;
     } else {
       $pdo->prepare('INSERT INTO products(name,category,price,shape,material,color,image,description,active) VALUES(?,?,?,?,?,?,?,?,?)')->execute($v);
-      $debugLog[] = 'Inserted new product, last ID: '.$pdo->lastInsertId();
     }
 
-    // Store debug in session so we can show it after redirect
-    $_SESSION['upload_debug'] = $debugLog;
-    $_SESSION['upload_err']   = $uploadErr ?? '';
-
-    // If upload failed, stay on page to show error clearly — don't redirect
-    if(!empty($uploadErr)){
-      $showDebug = true;
-      $showDebugErr = $uploadErr;
+    if($uploadErr){
+      $showUploadErr = $uploadErr;
+      // fall through — show form again with error
     } else {
       header('Location:products.php?saved=1');exit;
     }
@@ -111,10 +70,10 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
 
   if($action==='delete'){
     $pid = (int)$_POST['id'];
-    // Delete uploaded image too
     $row = $pdo->prepare('SELECT image FROM products WHERE id=?');
-    $row->execute([$pid]);$row=$row->fetch();
-    if($row && $row['image'] && file_exists($uploadDir.$row['image']))
+    $row->execute([$pid]); $row=$row->fetch();
+    // Nothing to delete locally for Cloudinary URLs (optional: call cloudinary_delete)
+    if($row && $row['image'] && !is_cloudinary_url($row['image']) && file_exists($uploadDir.$row['image']))
       @unlink($uploadDir.$row['image']);
     $pdo->prepare('DELETE FROM products WHERE id=?')->execute([$pid]);
     header('Location:products.php');exit;
@@ -135,10 +94,14 @@ $colors    = ['Black','Brown','Tortoise','Gold','Silver','Grey','Blue','Red','Pi
 $materials = ['Metal','Plastic','TR90','Titanium','Acetate','Mixed','Rubber'];
 $categories= ['Prescription','Sunglasses','Blue Light','Kids'];
 
-// Current preview image
-$currentImg = $edit && $edit['image']
-  ? $uploadUrl.$edit['image']
-  : frame_image($edit['color']??'',$edit['shape']??'',$edit['category']??'');
+// Helper: resolve image to displayable URL
+function product_img_url(string $val, string $color='', string $shape='', string $cat=''): string {
+  if(!$val) return frame_image($color, $shape, $cat);
+  if(is_cloudinary_url($val)) return $val;
+  return UPLOADS_URL.'frames/'.$val; // old local file
+}
+
+$currentImg = product_img_url($edit['image']??'', $edit['color']??'', $edit['shape']??'', $edit['category']??'');
 
 include '_top.php';
 ?>
@@ -149,21 +112,10 @@ if(isset($_GET['saved'])):?>
 <div class="alert alert-success mb-3">✔ Product saved successfully.</div>
 <?php endif;?>
 
-<?php
-// Show debug/error inline if upload failed (no redirect happened)
-if(!empty($showDebug)):?>
-<div class="alert alert-danger mb-3" style="font-family:monospace;font-size:13px">
-  <b style="font-size:15px">❌ Image upload failed — details below:</b>
-  <div class="mt-2 p-2 bg-white rounded">
-    <b>Error:</b> <?=e($showDebugErr)?><br><br>
-    <b>Full log:</b>
-    <ul class="mb-0 mt-1">
-      <?php foreach($debugLog as $line):?>
-      <li><?=e($line)?></li>
-      <?php endforeach;?>
-    </ul>
-  </div>
-  <div class="mt-2">The product was saved <b>without an image</b>. Fix the error above and edit the product to add the image.</div>
+<?php if(!empty($showUploadErr)):?>
+<div class="alert alert-danger mb-3">
+  <b>❌ Image upload failed:</b> <?=e($showUploadErr)?>
+  <div class="small mt-1">The product was saved without an image. Edit it to try uploading again.</div>
 </div>
 <?php endif;?>
 
@@ -196,7 +148,7 @@ if(!empty($showDebug)):?>
             <div class="upload-placeholder" id="uploadPlaceholder">
               <?php if($edit && $edit['image']):?>
               <div class="upload-has-image">
-                <img src="<?=$uploadUrl.e($edit['image'])?>" alt="Current" class="upload-current-img">
+                <img src="<?=e(product_img_url($edit['image']))?>" alt="Current" class="upload-current-img">
                 <div class="small text-muted mt-1">Click to change image</div>
               </div>
               <?php else:?>
@@ -303,9 +255,7 @@ if(!empty($showDebug)):?>
           </thead>
           <tbody>
           <?php foreach($rows as $r):
-            $img = $r['image']
-              ? $uploadUrl.$r['image']
-              : frame_image($r['color']??'',$r['shape']??'',$r['category']??'');
+            $img = product_img_url($r['image']??'', $r['color']??'', $r['shape']??'', $r['category']??'');
           ?>
           <tr>
             <td>

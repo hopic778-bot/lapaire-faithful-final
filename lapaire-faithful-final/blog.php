@@ -37,7 +37,7 @@ include 'includes/header.php';
     <div class="row g-4">
       <?php foreach($posts as $i=>$p):
         $img = !empty($p['image'])
-          ? UPLOADS_URL.'blog/'.e($p['image'])
+          ? (str_starts_with($p['image'],'http') ? $p['image'] : UPLOADS_URL.'blog/'.e($p['image']))
           : $blogImgs[$i%count($blogImgs)];
       ?>
       <div class="col-md-6 col-lg-4">
